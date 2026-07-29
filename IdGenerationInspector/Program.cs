@@ -84,13 +84,28 @@ var modules = await ReadRowsAsync(connection, """
     ORDER BY o.type_desc, s.name, o.name;
     """);
 
+PrintSection("SECUENCIAS SQL", sequences, row =>
+    $"{Value(row, "SchemaName")}.{Value(row, "SequenceName")} | actual={Value(row, "CurrentValue")} | inicio={Value(row, "StartValue")} | incremento={Value(row, "IncrementValue")}");
+
+PrintSection("COLUMNAS CANDIDATAS DE CONSECUTIVOS", candidateColumns, row =>
+    $"{Value(row, "SchemaName")}.{Value(row, "TableName")}.{Value(row, "ColumnName")} | {Value(row, "DataType")}");
+
+PrintSection("MÓDULOS SQL RELACIONADOS", modules, row =>
+    $"{Value(row, "ObjectType")} | {Value(row, "SchemaName")}.{Value(row, "ObjectName")}");
+
+var recommendation = BuildRecommendation(targetReports, sequences, candidateColumns, modules);
+Console.WriteLine();
+Console.WriteLine("CONCLUSIÓN PRELIMINAR");
+Console.WriteLine($"  {recommendation}");
+
 var report = new IdGenerationReport(
     connection.Database,
     DateTimeOffset.Now,
     targetReports,
     sequences,
     candidateColumns,
-    modules);
+    modules,
+    recommendation);
 
 await File.WriteAllTextAsync(
     outputPath,
@@ -98,6 +113,59 @@ await File.WriteAllTextAsync(
 
 Console.WriteLine();
 Console.WriteLine($"Reporte guardado en: {Path.GetFullPath(outputPath)}");
+
+static string BuildRecommendation(
+    IReadOnlyCollection<TargetReport> targets,
+    IReadOnlyCollection<Dictionary<string, object?>> sequences,
+    IReadOnlyCollection<Dictionary<string, object?>> candidateColumns,
+    IReadOnlyCollection<Dictionary<string, object?>> modules)
+{
+    var hasSqlGenerator = sequences.Count > 0 ||
+                          targets.Any(target => target.IsIdentity || target.DefaultDefinition is not null || target.Triggers.Count > 0) ||
+                          modules.Count > 0;
+
+    if (hasSqlGenerator)
+        return "Hay mecanismos SQL que deben revisarse antes de definir la estrategia de IDs.";
+
+    var strongCandidates = candidateColumns.Where(row =>
+    {
+        var table = Value(row, "TableName");
+        var column = Value(row, "ColumnName");
+        return table.Contains("CONSEC", StringComparison.OrdinalIgnoreCase) ||
+               table.Contains("FOLIO", StringComparison.OrdinalIgnoreCase) ||
+               column.Contains("CONSECUTIVO", StringComparison.OrdinalIgnoreCase) ||
+               column.Contains("ULTIMO", StringComparison.OrdinalIgnoreCase) ||
+               column.Contains("SIGUIENTE", StringComparison.OrdinalIgnoreCase) ||
+               column.Contains("CONTADOR", StringComparison.OrdinalIgnoreCase);
+    }).ToList();
+
+    return strongCandidates.Count > 0
+        ? "No hay generación automática en las tablas objetivo, pero existen columnas candidatas que deben inspeccionarse."
+        : "No se encontró generación automática ni contador SQL evidente. La hipótesis principal es asignación desde la aplicación mediante MAX(ID)+1; debe implementarse con transacción SERIALIZABLE y bloqueos UPDLOCK/HOLDLOCK.";
+}
+
+static void PrintSection(
+    string title,
+    IReadOnlyCollection<Dictionary<string, object?>> rows,
+    Func<Dictionary<string, object?>, string> formatter)
+{
+    Console.WriteLine();
+    Console.WriteLine(title);
+
+    if (rows.Count == 0)
+    {
+        Console.WriteLine("  Ninguno");
+        return;
+    }
+
+    foreach (var row in rows)
+        Console.WriteLine($"  {formatter(row)}");
+}
+
+static string Value(IReadOnlyDictionary<string, object?> row, string column) =>
+    row.TryGetValue(column, out var value) && value is not null
+        ? Convert.ToString(value) ?? "NULL"
+        : "NULL";
 
 static async Task<TargetReport> ReadTargetMetadataAsync(SqlConnection connection, Target target)
 {
@@ -229,4 +297,5 @@ internal sealed record IdGenerationReport(
     IReadOnlyCollection<TargetReport> Targets,
     IReadOnlyCollection<Dictionary<string, object?>> Sequences,
     IReadOnlyCollection<Dictionary<string, object?>> CandidateCounterColumns,
-    IReadOnlyCollection<Dictionary<string, object?>> SqlModules);
+    IReadOnlyCollection<Dictionary<string, object?>> SqlModules,
+    string Recommendation);
