@@ -11,6 +11,10 @@
     <Compile Remove="QuoteTemplateGenerator\**\*.cs" />
     <EmbeddedResource Remove="QuoteTemplateGenerator\**\*" />
     <None Remove="QuoteTemplateGenerator\**\*" />
+
+    <Compile Remove="IdGenerationInspector\**\*.cs" />
+    <EmbeddedResource Remove="IdGenerationInspector\**\*" />
+    <None Remove="IdGenerationInspector\**\*" />
   </ItemGroup>
 
   <ItemGroup>
