@@ -15,6 +15,10 @@
     <Compile Remove="IdGenerationInspector\**\*.cs" />
     <EmbeddedResource Remove="IdGenerationInspector\**\*" />
     <None Remove="IdGenerationInspector\**\*" />
+
+    <Compile Remove="IdReservationDryRun\**\*.cs" />
+    <EmbeddedResource Remove="IdReservationDryRun\**\*" />
+    <None Remove="IdReservationDryRun\**\*" />
   </ItemGroup>
 
   <ItemGroup>
