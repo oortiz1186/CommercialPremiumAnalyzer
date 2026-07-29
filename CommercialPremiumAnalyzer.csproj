@@ -19,6 +19,10 @@
     <Compile Remove="IdReservationDryRun\**\*.cs" />
     <EmbeddedResource Remove="IdReservationDryRun\**\*" />
     <None Remove="IdReservationDryRun\**\*" />
+
+    <Compile Remove="QuoteRelatedRowsInspector\**\*.cs" />
+    <EmbeddedResource Remove="QuoteRelatedRowsInspector\**\*" />
+    <None Remove="QuoteRelatedRowsInspector\**\*" />
   </ItemGroup>
 
   <ItemGroup>
