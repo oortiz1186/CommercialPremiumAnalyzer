@@ -23,6 +23,10 @@
     <Compile Remove="QuoteRelatedRowsInspector\**\*.cs" />
     <EmbeddedResource Remove="QuoteRelatedRowsInspector\**\*" />
     <None Remove="QuoteRelatedRowsInspector\**\*" />
+
+    <Compile Remove="QuoteWriterDryRun\**\*.cs" />
+    <EmbeddedResource Remove="QuoteWriterDryRun\**\*" />
+    <None Remove="QuoteWriterDryRun\**\*" />
   </ItemGroup>
 
   <ItemGroup>
