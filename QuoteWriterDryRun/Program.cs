@@ -3,8 +3,8 @@ using System.Globalization;
 using System.Text.Json;
 using Microsoft.Data.SqlClient;
 
-const string connectionVariable = "COMMERCIAL_PREMIUM_CONNECTION";
-const string allowedDatabase = "adMIDA_PRUEBAS";
+const string ConnectionVariable = "COMMERCIAL_PREMIUM_CONNECTION";
+const string AllowedDatabase = "adMIDA_PRUEBAS";
 
 try
 {
@@ -12,9 +12,9 @@ try
     if (!File.Exists(inputPath))
         throw new FileNotFoundException($"No existe el archivo {inputPath}.");
 
-    var connectionString = Environment.GetEnvironmentVariable(connectionVariable);
+    var connectionString = Environment.GetEnvironmentVariable(ConnectionVariable);
     if (string.IsNullOrWhiteSpace(connectionString))
-        throw new InvalidOperationException($"Falta la variable de entorno {connectionVariable}.");
+        throw new InvalidOperationException($"Falta la variable de entorno {ConnectionVariable}.");
 
     using var json = JsonDocument.Parse(await File.ReadAllTextAsync(inputPath));
     var root = json.RootElement;
@@ -25,12 +25,15 @@ try
     await using var connection = new SqlConnection(connectionString);
     await connection.OpenAsync();
 
-    if (!connection.Database.Equals(allowedDatabase, StringComparison.OrdinalIgnoreCase))
-        throw new InvalidOperationException($"Ejecución bloqueada. Base actual: {connection.Database}. Solo se permite {allowedDatabase}.");
+    if (!connection.Database.Equals(AllowedDatabase, StringComparison.OrdinalIgnoreCase))
+        throw new InvalidOperationException(
+            $"Ejecución bloqueada. Base actual: {connection.Database}. Solo se permite {AllowedDatabase}.");
 
     var conceptId = ReadInt64(documentRow, "CIDCONCEPTODOCUMENTO");
 
-    await using var transaction = (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable);
+    await using var transaction =
+        (SqlTransaction)await connection.BeginTransactionAsync(IsolationLevel.Serializable);
+
     try
     {
         await AcquireApplicationLockAsync(connection, transaction);
@@ -39,35 +42,48 @@ try
         var firstMovementId = await NextIdAsync(connection, transaction, "admMovimientos", "CIDMOVIMIENTO");
         var firstAddressId = await NextIdAsync(connection, transaction, "admDomicilios", "CIDDIRECCION");
         var newFolio = await ReadNextFolioAsync(connection, transaction, conceptId);
-        var newGuid = Guid.NewGuid();
 
-        var documentOverrides = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
-        {
-            ["CIDDOCUMENTO"] = newDocumentId,
-            ["CFOLIO"] = newFolio,
-            ["CGUIDDOCUMENTO"] = newGuid
-        };
+        // En esta versión de Comercial Premium, CGUIDDOCUMENTO es una columna de texto.
+        var newGuid = Guid.NewGuid().ToString("D", CultureInfo.InvariantCulture);
 
-        await InsertCloneAsync(connection, transaction, "admDocumentos", documentRow, documentOverrides);
+        await InsertCloneAsync(
+            connection,
+            transaction,
+            "admDocumentos",
+            documentRow,
+            new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["CIDDOCUMENTO"] = newDocumentId,
+                ["CFOLIO"] = newFolio,
+                ["CGUIDDOCUMENTO"] = newGuid
+            });
 
         for (var index = 0; index < movements.Length; index++)
         {
-            var overrides = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["CIDMOVIMIENTO"] = firstMovementId + index,
-                ["CIDDOCUMENTO"] = newDocumentId
-            };
-            await InsertCloneAsync(connection, transaction, "admMovimientos", movements[index], overrides);
+            await InsertCloneAsync(
+                connection,
+                transaction,
+                "admMovimientos",
+                movements[index],
+                new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["CIDMOVIMIENTO"] = firstMovementId + index,
+                    ["CIDDOCUMENTO"] = newDocumentId
+                });
         }
 
         for (var index = 0; index < addresses.Length; index++)
         {
-            var overrides = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["CIDDIRECCION"] = firstAddressId + index,
-                ["CIDCATALOGO"] = newDocumentId
-            };
-            await InsertCloneAsync(connection, transaction, "admDomicilios", addresses[index], overrides);
+            await InsertCloneAsync(
+                connection,
+                transaction,
+                "admDomicilios",
+                addresses[index],
+                new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase)
+                {
+                    ["CIDDIRECCION"] = firstAddressId + index,
+                    ["CIDCATALOGO"] = newDocumentId
+                });
         }
 
         await using (var update = new SqlCommand("""
@@ -78,16 +94,28 @@ try
         {
             update.Parameters.Add("@Folio", SqlDbType.Float).Value = newFolio;
             update.Parameters.Add("@ConceptoId", SqlDbType.BigInt).Value = conceptId;
+
             if (await update.ExecuteNonQueryAsync() != 1)
                 throw new InvalidOperationException("No se actualizó exactamente un concepto.");
         }
 
-        var documentCount = await CountAsync(connection, transaction,
-            "SELECT COUNT(*) FROM dbo.admDocumentos WHERE CIDDOCUMENTO = @Id;", newDocumentId);
-        var movementCount = await CountAsync(connection, transaction,
-            "SELECT COUNT(*) FROM dbo.admMovimientos WHERE CIDDOCUMENTO = @Id;", newDocumentId);
-        var addressCount = await CountAsync(connection, transaction,
-            "SELECT COUNT(*) FROM dbo.admDomicilios WHERE CIDCATALOGO = @Id;", newDocumentId);
+        var documentCount = await CountAsync(
+            connection,
+            transaction,
+            "SELECT COUNT(*) FROM dbo.admDocumentos WHERE CIDDOCUMENTO = @Id;",
+            newDocumentId);
+
+        var movementCount = await CountAsync(
+            connection,
+            transaction,
+            "SELECT COUNT(*) FROM dbo.admMovimientos WHERE CIDDOCUMENTO = @Id;",
+            newDocumentId);
+
+        var addressCount = await CountAsync(
+            connection,
+            transaction,
+            "SELECT COUNT(*) FROM dbo.admDomicilios WHERE CIDCATALOGO = @Id;",
+            newDocumentId);
 
         Console.WriteLine("WRITER DE PRUEBA EJECUTADO DENTRO DE TRANSACCIÓN");
         Console.WriteLine($"  Base: {connection.Database}");
@@ -98,8 +126,13 @@ try
         Console.WriteLine($"  Movimientos validados: {movementCount}");
         Console.WriteLine($"  Domicilios validados: {addressCount}");
 
-        if (documentCount != 1 || movementCount != movements.Length || addressCount != addresses.Length)
-            throw new InvalidOperationException("La validación interna no coincide con el paquete de origen.");
+        if (documentCount != 1 ||
+            movementCount != movements.Length ||
+            addressCount != addresses.Length)
+        {
+            throw new InvalidOperationException(
+                "La validación interna no coincide con el paquete de origen.");
+        }
 
         Console.WriteLine();
         Console.WriteLine("ROLLBACK obligatorio: no se guardó ningún cambio.");
@@ -113,7 +146,7 @@ try
 }
 catch (Exception exception)
 {
-    Console.Error.WriteLine(exception.ToString());
+    Console.Error.WriteLine(exception);
     Environment.ExitCode = 1;
 }
 
@@ -137,24 +170,48 @@ static async Task InsertCloneAsync(
 
     var columnSql = string.Join(", ", columns.Select(column => $"[{column.Name}]"));
     var parameterSql = string.Join(", ", columns.Select((_, index) => $"@p{index}"));
-    var sql = $"INSERT INTO dbo.[{tableName}] ({columnSql}) VALUES ({parameterSql});";
 
-    await using var command = new SqlCommand(sql, connection, transaction) { CommandTimeout = 120 };
+    await using var command = new SqlCommand(
+        $"INSERT INTO dbo.[{tableName}] ({columnSql}) VALUES ({parameterSql});",
+        connection,
+        transaction)
+    {
+        CommandTimeout = 120
+    };
+
     for (var index = 0; index < columns.Length; index++)
     {
         var column = columns[index];
         object? value;
-        if (!overrides.TryGetValue(column.Name, out value))
+
+        if (overrides.TryGetValue(column.Name, out var overrideValue))
+            value = ConvertOverrideValue(overrideValue, column.DataType);
+        else
             value = ConvertJsonValue(sourceProperties[column.Name], column.DataType);
 
         var parameter = command.Parameters.Add($"@p{index}", column.SqlDbType);
         if (column.Size > 0 && column.Size <= 8000)
             parameter.Size = column.Size;
+
         parameter.Value = value ?? DBNull.Value;
     }
 
     if (await command.ExecuteNonQueryAsync() != 1)
         throw new InvalidOperationException($"No se insertó exactamente una fila en {tableName}.");
+}
+
+static object? ConvertOverrideValue(object? value, string dataType)
+{
+    if (value is null)
+        return null;
+
+    return dataType.ToLowerInvariant() switch
+    {
+        "char" or "varchar" or "text" or "nchar" or "nvarchar" or "ntext"
+            => Convert.ToString(value, CultureInfo.InvariantCulture),
+        "uniqueidentifier" when value is string text => Guid.Parse(text),
+        _ => value
+    };
 }
 
 static async Task<List<WritableColumn>> ReadWritableSchemaAsync(
@@ -208,10 +265,13 @@ static object? ConvertJsonValue(JsonElement value, string dataType)
         "real" => value.GetSingle(),
         "decimal" or "numeric" or "money" or "smallmoney" => value.GetDecimal(),
         "uniqueidentifier" => Guid.Parse(value.GetString()!),
-        "date" or "datetime" or "datetime2" or "smalldatetime" => DateTime.Parse(value.GetString()!, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
-        "datetimeoffset" => DateTimeOffset.Parse(value.GetString()!, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        "date" or "datetime" or "datetime2" or "smalldatetime"
+            => DateTime.Parse(value.GetString()!, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+        "datetimeoffset"
+            => DateTimeOffset.Parse(value.GetString()!, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
         "time" => TimeSpan.Parse(value.GetString()!, CultureInfo.InvariantCulture),
-        "binary" or "varbinary" or "image" => Convert.FromHexString(value.GetString() ?? string.Empty),
+        "binary" or "varbinary" or "image"
+            => Convert.FromHexString(value.GetString() ?? string.Empty),
         _ => value.ValueKind == JsonValueKind.String ? value.GetString() : value.GetRawText()
     };
 }
@@ -247,7 +307,9 @@ static SqlDbType ToSqlDbType(string typeName) => typeName.ToLowerInvariant() swi
     _ => throw new NotSupportedException($"Tipo SQL no soportado: {typeName}")
 };
 
-static async Task AcquireApplicationLockAsync(SqlConnection connection, SqlTransaction transaction)
+static async Task AcquireApplicationLockAsync(
+    SqlConnection connection,
+    SqlTransaction transaction)
 {
     await using var command = new SqlCommand("""
         DECLARE @Result int;
@@ -285,8 +347,10 @@ static async Task<long> ReadNextFolioAsync(
         FROM dbo.admConceptos WITH (UPDLOCK, HOLDLOCK)
         WHERE CIDCONCEPTODOCUMENTO = @ConceptoId;
         """, connection, transaction);
+
     command.Parameters.Add("@ConceptoId", SqlDbType.BigInt).Value = conceptId;
     var value = await command.ExecuteScalarAsync();
+
     return value is null or DBNull
         ? throw new InvalidOperationException($"No existe el concepto {conceptId}.")
         : Convert.ToInt64(value, CultureInfo.InvariantCulture);
@@ -322,7 +386,10 @@ static long ReadInt64(JsonElement row, string columnName)
 
 static string? GetOption(string[] values, string name)
 {
-    var index = Array.FindIndex(values, value => value.Equals(name, StringComparison.OrdinalIgnoreCase));
+    var index = Array.FindIndex(
+        values,
+        value => value.Equals(name, StringComparison.OrdinalIgnoreCase));
+
     return index >= 0 && index + 1 < values.Length ? values[index + 1] : null;
 }
 
