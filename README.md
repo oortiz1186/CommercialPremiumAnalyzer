@@ -1,6 +1,18 @@
 # CommercialPremiumAnalyzer
 
-Herramienta de solo lectura para investigar los cambios que realiza CONTPAQi Comercial Premium sobre SQL Server.
+Herramienta enfocada en descubrir y reproducir de forma segura la creación de cotizaciones de CONTPAQi Comercial Premium para integrarla posteriormente con Licencias MIDA.
+
+## Objetivo
+
+El objetivo final es que Licencias MIDA pueda enviar una cotización y recibir de Comercial Premium:
+
+- `CIDDOCUMENTO`;
+- serie;
+- folio;
+- total;
+- referencia de creación.
+
+Toda la investigación y las pruebas deben hacerse primero en `adMIDA_PRUEBAS`.
 
 ## Funciones actuales
 
@@ -11,7 +23,9 @@ Herramienta de solo lectura para investigar los cambios que realiza CONTPAQi Com
 - Exportar comparaciones de snapshots a JSON.
 - Comparar dos filas columna por columna.
 - Exportar comparaciones de filas a JSON.
-- No ejecuta `INSERT`, `UPDATE` ni `DELETE`.
+- Capturar una cotización real como paquete técnico.
+- Generar una plantilla SQL de investigación que termina siempre en `ROLLBACK`.
+- No ejecuta escrituras automáticas en Comercial Premium.
 
 ## Requisitos
 
@@ -27,11 +41,13 @@ $env:COMMERCIAL_PREMIUM_CONNECTION = "Server=WIN-R5DQ363CI37\COMPAC;Database=adM
 
 No guardes contraseñas en el repositorio.
 
-## Compilar
+## Compilar todos los proyectos
 
 ```powershell
 dotnet restore
 dotnet build
+
+dotnet build .\QuoteTemplateGenerator\QuoteTemplateGenerator.csproj
 ```
 
 ## Crear snapshot antes de una operación
@@ -70,22 +86,13 @@ dotnet run -- compare-snapshots `
 
 Por omisión, el comando consulta la base actual y agrega al JSON el contenido completo de los registros cuya llave quedó entre el máximo anterior y el máximo posterior.
 
-Para evitar cargar esos registros:
-
-```powershell
-dotnet run -- compare-snapshots `
-  antes-cotizacion.json `
-  despues-cotizacion.json `
-  --include-new-rows false
-```
-
-Tipos mostrados por el comparador:
+Tipos mostrados:
 
 - `INSERT`: aumentó el número de registros.
 - `DELETE`: disminuyó el número de registros.
 - `UPDATE`: no cambió el conteo, pero sí el checksum.
 
-## Comparar dos documentos
+## Comparar documentos o movimientos
 
 ```powershell
 dotnet run -- compare-rows `
@@ -96,19 +103,51 @@ dotnet run -- compare-rows `
   --output documento-8296-vs-8297.json
 ```
 
-## Comparar dos movimientos
+## Capturar una cotización completa
+
+El proyecto `QuoteTemplateGenerator` extrae:
+
+- `admDocumentos`;
+- todos los `admMovimientos` relacionados;
+- todos los `admDomicilios` relacionados;
+- el registro de `admConceptos`;
+- definición de columnas, tipos, nulabilidad, identidad y valores predeterminados.
+
+Ejemplo:
 
 ```powershell
-dotnet run -- compare-rows `
-  --table dbo.admMovimientos `
-  --key CIDMOVIMIENTO `
-  --a 11696 `
-  --b 11697 `
-  --output movimiento-11696-vs-11697.json
+dotnet run --project .\QuoteTemplateGenerator\QuoteTemplateGenerator.csproj -- capture `
+  --document-id 8297 `
+  --output quote-8297.json
 ```
 
-El comparador imprime y exporta solamente las columnas diferentes.
+## Generar plantilla SQL de investigación
+
+```powershell
+dotnet run --project .\QuoteTemplateGenerator\QuoteTemplateGenerator.csproj -- generate-template `
+  --input quote-8297.json `
+  --output quote-template-8297.sql
+```
+
+La plantilla:
+
+- no se ejecuta automáticamente;
+- contiene `SET XACT_ABORT ON` y `BEGIN TRAN`;
+- termina en `ROLLBACK`;
+- marca como pendientes los consecutivos de IDs;
+- marca como pendientes `admAcumulados` y `admBitacoras`;
+- sirve para revisar qué valores se copian, cuáles cambian y cuáles debemos parametrizar en el escritor real.
+
+## Ruta hacia Licencias MIDA
+
+1. Capturar varias cotizaciones reales con clientes, productos, cantidades e importes diferentes.
+2. Clasificar campos constantes, variables, calculados y generados.
+3. Confirmar la estrategia de consecutivos y bloqueo del folio.
+4. Reproducir `admAcumulados` y `admBitacoras`.
+5. Crear una cotización de prueba dentro de una transacción controlada.
+6. Validarla desde Comercial Premium.
+7. Convertir la lógica validada en un servicio consumido por Licencias MIDA.
 
 ## Seguridad
 
-Usa exclusivamente `adMIDA_PRUEBAS`. Para las pruebas se recomienda un inicio de sesión SQL con permisos `SELECT` únicamente y no usar la cuenta `sa`.
+Usa exclusivamente `adMIDA_PRUEBAS`. Para investigación se recomienda un inicio de sesión SQL con permisos `SELECT` únicamente y no usar la cuenta `sa`.
