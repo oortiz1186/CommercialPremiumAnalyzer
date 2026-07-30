@@ -9,6 +9,8 @@ const string AllowedDatabase = "adMIDA_PRUEBAS";
 try
 {
     var inputPath = GetRequiredOption(args, "--input");
+    var commitRequested = HasFlag(args, "--commit");
+
     if (!File.Exists(inputPath))
         throw new FileNotFoundException($"No existe el archivo {inputPath}.");
 
@@ -42,8 +44,6 @@ try
         var firstMovementId = await NextIdAsync(connection, transaction, "admMovimientos", "CIDMOVIMIENTO");
         var firstAddressId = await NextIdAsync(connection, transaction, "admDomicilios", "CIDDIRECCION");
         var newFolio = await ReadNextFolioAsync(connection, transaction, conceptId);
-
-        // En esta versión de Comercial Premium, CGUIDDOCUMENTO es una columna de texto.
         var newGuid = Guid.NewGuid().ToString("D", CultureInfo.InvariantCulture);
 
         await InsertCloneAsync(
@@ -86,18 +86,7 @@ try
                 });
         }
 
-        await using (var update = new SqlCommand("""
-            UPDATE dbo.admConceptos
-            SET CNOFOLIO = @Folio
-            WHERE CIDCONCEPTODOCUMENTO = @ConceptoId;
-            """, connection, transaction))
-        {
-            update.Parameters.Add("@Folio", SqlDbType.Float).Value = newFolio;
-            update.Parameters.Add("@ConceptoId", SqlDbType.BigInt).Value = conceptId;
-
-            if (await update.ExecuteNonQueryAsync() != 1)
-                throw new InvalidOperationException("No se actualizó exactamente un concepto.");
-        }
+        await UpdateFolioAsync(connection, transaction, conceptId, newFolio);
 
         var documentCount = await CountAsync(
             connection,
@@ -117,7 +106,7 @@ try
             "SELECT COUNT(*) FROM dbo.admDomicilios WHERE CIDCATALOGO = @Id;",
             newDocumentId);
 
-        Console.WriteLine("WRITER DE PRUEBA EJECUTADO DENTRO DE TRANSACCIÓN");
+        Console.WriteLine("WRITER DE COTIZACIÓN EJECUTADO DENTRO DE TRANSACCIÓN");
         Console.WriteLine($"  Base: {connection.Database}");
         Console.WriteLine($"  Documento nuevo: {newDocumentId}");
         Console.WriteLine($"  Folio nuevo: {newFolio}");
@@ -135,12 +124,25 @@ try
         }
 
         Console.WriteLine();
-        Console.WriteLine("ROLLBACK obligatorio: no se guardó ningún cambio.");
-        await transaction.RollbackAsync();
+
+        if (commitRequested)
+        {
+            await transaction.CommitAsync();
+            Console.WriteLine("COMMIT realizado: la cotización quedó guardada en adMIDA_PRUEBAS.");
+            Console.WriteLine($"Busca en Comercial Premium la cotización CZM-{newFolio}.");
+        }
+        else
+        {
+            await transaction.RollbackAsync();
+            Console.WriteLine("ROLLBACK realizado: no se guardó ningún cambio.");
+            Console.WriteLine("Para guardar de verdad, vuelve a ejecutar agregando --commit.");
+        }
     }
     catch
     {
-        await transaction.RollbackAsync();
+        if (transaction.Connection is not null)
+            await transaction.RollbackAsync();
+
         throw;
     }
 }
@@ -198,6 +200,25 @@ static async Task InsertCloneAsync(
 
     if (await command.ExecuteNonQueryAsync() != 1)
         throw new InvalidOperationException($"No se insertó exactamente una fila en {tableName}.");
+}
+
+static async Task UpdateFolioAsync(
+    SqlConnection connection,
+    SqlTransaction transaction,
+    long conceptId,
+    long newFolio)
+{
+    await using var update = new SqlCommand("""
+        UPDATE dbo.admConceptos
+        SET CNOFOLIO = @Folio
+        WHERE CIDCONCEPTODOCUMENTO = @ConceptoId;
+        """, connection, transaction);
+
+    update.Parameters.Add("@Folio", SqlDbType.Float).Value = newFolio;
+    update.Parameters.Add("@ConceptoId", SqlDbType.BigInt).Value = conceptId;
+
+    if (await update.ExecuteNonQueryAsync() != 1)
+        throw new InvalidOperationException("No se actualizó exactamente un concepto.");
 }
 
 static object? ConvertOverrideValue(object? value, string dataType)
@@ -383,6 +404,9 @@ static long ReadInt64(JsonElement row, string columnName)
         ? value.GetInt64()
         : long.Parse(value.GetString()!, CultureInfo.InvariantCulture);
 }
+
+static bool HasFlag(string[] values, string name) =>
+    values.Any(value => value.Equals(name, StringComparison.OrdinalIgnoreCase));
 
 static string? GetOption(string[] values, string name)
 {
